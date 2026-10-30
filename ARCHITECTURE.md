@@ -541,9 +541,9 @@ Para ativar, basta trocar a implementação da porta. Controllers e use cases n�
 
 | Nível | O que garante | Infra |
 |---|---|---|
-| Unidade (95) | regras de domínio, máquina de estados, Money, hash, eventos | nenhuma |
-| Integração | constraints atacadas por SQL, atomicidade, idempotência, inbox/redelivery, retry/DLQ, publishers concorrentes, contrato HTTP | **PostgreSQL + SQS reais** |
-| Concorrência | paralelismo real (dezenas de conexões), **3 processos separados**, SIGKILL depois do commit/antes do ack, SIGKILL antes de publicar, publicação duplicada, SIGTERM + restart no meio de uma rajada | **PostgreSQL + SQS reais** |
+| Unidade (95 de 166) | regras de domínio, máquina de estados, Money, hash, eventos | nenhuma |
+| Integração | constraints atacadas por SQL, atomicidade, idempotência, inbox/redelivery, retry/DLQ, publishers concorrentes, contrato HTTP | **PostgreSQL + LocalStack em containers** |
+| Concorrência | paralelismo real (dezenas de conexões), **3 processos separados**, SIGKILL depois do commit/antes do ack, SIGKILL antes de publicar, publicação duplicada, SIGTERM + restart no meio de uma rajada | **PostgreSQL + LocalStack em containers** |
 
 - **Determinismo:**
   - as asserções verificam **invariantes** (1 débito, saldo final, status "um PROCESSED e um REJECTED"),
@@ -565,7 +565,7 @@ Para ativar, basta trocar a implementação da porta. Controllers e use cases n�
 
 - 40 usuários virtuais em loop fechado (cada um manda a próxima requisição quando recebe a resposta);
 - apostas de `1.00`, espalhadas em round-robin pelas 3 instâncias;
-- **20%** das apostas na **mesma** wallet (hot wallet), o resto em 100 wallets;
+- **20%** das apostas na **mesma** wallet (hot wallet), o resto em 200 wallets;
 - **10%** reenvios idênticos (replays);
 - durante o teste, um "sistema downstream" consome a fila de eventos e deduplica por `eventId`;
 - depois da carga:
@@ -573,46 +573,37 @@ Para ativar, basta trocar a implementação da porta. Controllers e use cases n�
   - soma as métricas das 3 instâncias;
   - roda a **reconciliação de todas as wallets**.
 
-**Ambiente da execução registrada:** máquina de desenvolvimento compartilhada com **2 vCPUs** (Xeon
-2.1 GHz) e 8 GB, rodando **tudo junto**:
-
-- PostgreSQL 16;
-- emulador de SQS (moto, no lugar do LocalStack: o Docker Hub não estava acessível nesse ambiente);
-- 3 instâncias;
-- o próprio gerador de carga.
+**Ambiente:** notebook de desenvolvimento com Windows + WSL2 e Docker Desktop, rodando **tudo junto na
+mesma máquina**: o `docker compose` completo (PostgreSQL 16, LocalStack 4.12 e as 3 instâncias
+`app-1..3`) e o próprio gerador de carga. Bun 1.4.4.
 
 | Métrica | Resultado |
 |---|---|
-| Duração | 20 s |
-| Requisições | 1.535 |
-| Throughput | **~75 req/s** |
-| Latência p50 / p95 / p99 | **180 ms / 2,5 s / 3,8 s** |
+| Duração | 30 s |
+| Requisições | 4.708 |
+| Throughput | **~154 req/s** |
+| Latência p50 / p95 / p99 | **65 ms / 1,5 s / 1,9 s** (máx. 2,8 s) |
 | Taxa de erro | **0%** |
-| Status | 1.382 × 201, 153 × 200 (replay) |
-| Conflitos de lock (`contended`) | 336 |
+| Status | 4.262 × 201, 446 × 200 (replay) |
+| Conflitos de lock (`contended`) | 900 |
 | Retries de transação | 0 |
-| Outbox lag ao final da carga | ~8,7 s → **zerou em 14,7 s** após a carga |
-| Eventos recebidos downstream | 2.966, **todos com eventId único** (= 1.382 × 2 + 101 × 2 da abertura) |
-| Reconciliação | **101/101 wallets consistentes** |
+| Outbox lag ao final da carga | **0 s** (nada pendente) |
+| Eventos recebidos downstream | 8.926, **todos com eventId único** (= 4.262 × 2 + 201 × 2 da abertura) |
+| Reconciliação | **201/201 wallets consistentes** |
 
-Em outras execuções, a variação foi de 72 a 82 req/s e o p95 ficou entre 2,2 e 2,5 s. Numa delas
-houve 1 erro de rede no cliente (0,07%), sem efeito nos dados.
+**Análise:**
 
-**Análise honesta:**
-
-- **O número absoluto diz pouco:** 2 vCPUs disputadas por Postgres, emulador, 3 processos e o gerador.
-  Isso mede o *comportamento* sob contenção, não a capacidade.
+- **O número absoluto diz pouco:** banco, emulador de SQS, 3 instâncias e o gerador disputam a mesma
+  máquina. Isso mede o *comportamento* sob contenção, não a capacidade de produção.
 - **A cauda (p95/p99) vem da hot wallet,** e é a consequência esperada da escolha pelo lock pessimista.
-  As ~8 VUs simultâneas na mesma wallet fazem **fila** (~340 esperas registradas em
+  As ~8 VUs simultâneas na mesma wallet fazem **fila** (900 esperas registradas em
   `lock_conflicts{contended}`), em vez de falharem. Nenhuma requisição foi rejeitada por concorrência e
-  nenhum retry foi necessário. A mediana reflete as wallets sem disputa.
-- **Outbox:** na primeira rodada, sem ninguém consumindo a fila de eventos, o lag cresceu sem parar.
-  Medindo, o `SendMessageBatch` do emulador levava ~1 s com a fila cheia (contra ~70 ms com ela vazia).
-  Era uma limitação do emulador, não do desenho. Mesmo assim:
-  - o publisher passou a enviar em **pistas paralelas por wallet**, preservando a ordem de cada wallet;
-  - o teste passou a ter um consumidor downstream, como seria em produção.
-  Com isso, o lag fica em segundos durante a carga e zera logo depois.
-- **O que importa no desafio:** zero inconsistências, zero débitos duplicados (153 replays corretos),
+  nenhum retry foi necessário. A mediana (65 ms) reflete as wallets sem disputa.
+- **Outbox:** o publisher envia em **pistas paralelas por wallet** (preservando a ordem de cada wallet)
+  e acompanhou a carga: nenhum evento pendente ao final. Em um ambiente mais lento (emulador SQS com
+  `SendMessageBatch` levando ~1 s), o lag chegou a alguns segundos durante a carga e zerou logo depois.
+  A métrica `wagering_outbox_lag_seconds` existe justamente para mostrar isso.
+- **O que importa no desafio:** zero inconsistências, zero débitos duplicados (446 replays corretos),
   zero eventos perdidos e nenhuma duplicata por `eventId`.
 
 ---
@@ -641,6 +632,6 @@ houve 1 erro de rede no cliente (0,07%), sem efeito nos dados.
   wallet, com encadeamento por `wallet_version` e verificação aritmética no banco.
 - **OpenTelemetry/dashboard** não implementados (opcionais). O `correlationId` atravessa HTTP, fila,
   logs e eventos, o que já permite rastrear manualmente.
-- **Ambiente de validação:** a suíte inteira foi executada contra PostgreSQL 16 e um emulador de SQS
-  (moto) fora de containers. O `docker-compose.yml` usa LocalStack. Os testes são agnósticos ao
-  emulador (só usam a API do SQS via SDK).
+- **Ambiente de validação:** a suíte inteira (166 testes) roda contra o PostgreSQL 16 e o LocalStack do
+  `docker compose`, em containers, em Windows + WSL2 (~1 min). Os testes também funcionam com outros
+  emuladores de SQS (MiniStack), porque só usam a API do SQS via SDK.
