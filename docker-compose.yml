@@ -1,0 +1,93 @@
+# Ambiente local completo:
+#   - postgres     → banco (fonte da verdade de todas as invariantes)
+#   - localstack   → emulador de AWS SQS (filas FIFO + DLQ)
+#   - setup        → job único: roda migrations e cria as filas
+#   - app-1/2/3    → TRÊS instâncias da mesma aplicação (requisito: ≥ 3 instâncias)
+#
+# Subir tudo:            docker compose up -d --build
+# Só infra (para testes): docker compose up -d postgres localstack
+
+x-app: &app
+  build: .
+  restart: unless-stopped
+  environment: &app-env
+    DATABASE_URL: postgres://postgres:postgres@postgres:5432/wagering
+    AWS_REGION: us-east-1
+    AWS_ACCESS_KEY_ID: test
+    AWS_SECRET_ACCESS_KEY: test
+    SQS_ENDPOINT: http://localstack:4566
+    LOG_LEVEL: info
+  depends_on:
+    setup:
+      condition: service_completed_successfully
+  # SIGTERM → a aplicação termina as mensagens em andamento antes de sair
+  stop_grace_period: 30s
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: wagering
+    volumes:
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/01-test-database.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d wagering"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  localstack:
+    # Tag community fixada: a partir de 2026.03 as imagens mais novas do
+    # LocalStack exigem auth token. Alternativa sem conta:
+    #   SQS_EMULATOR_IMAGE=ministackorg/ministack:latest docker compose up
+    image: ${SQS_EMULATOR_IMAGE:-localstack/localstack:4.12}
+    environment:
+      SERVICES: sqs
+      SQS_ENDPOINT_STRATEGY: path
+    ports:
+      - "4566:4566"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:4566/_localstack/health || wget -qO- http://localhost:4566/_localstack/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  setup:
+    build: .
+    command: ["bun", "run", "scripts/setup.ts"]
+    environment:
+      <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    restart: "no"
+
+  app-1:
+    <<: *app
+    environment:
+      <<: *app-env
+      INSTANCE_ID: app-1
+    ports:
+      - "3001:3000"
+
+  app-2:
+    <<: *app
+    environment:
+      <<: *app-env
+      INSTANCE_ID: app-2
+    ports:
+      - "3002:3000"
+
+  app-3:
+    <<: *app
+    environment:
+      <<: *app-env
+      INSTANCE_ID: app-3
+    ports:
+      - "3003:3000"
