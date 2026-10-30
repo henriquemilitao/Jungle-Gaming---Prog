@@ -1,5 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { MikroORM } from '@mikro-orm/postgresql';
+import { WalletBalanceChanged } from '../../src/domain/events/wagering-events';
+import { InboxMessage } from '../../src/domain/messaging/inbox-message';
+import { OutboxMessage } from '../../src/domain/messaging/outbox-message';
 import { Money } from '../../src/domain/money/money';
 import { buildOrmConfig } from '../../src/infrastructure/persistence/mikro-orm.config';
 import { betPayload, createTestApp, newPlayerId, resetDatabase, TEST_DATABASE_URL, type TestApp } from '../support/integration';
@@ -167,26 +170,35 @@ describe('Máquina de estados no banco', () => {
   });
 });
 
-describe('Atomicidade (wallet + ledger + transação + outbox)', () => {
-  test('falha no meio da transação → NADA é gravado', async () => {
-    const { walletId, playerId } = await newWallet('100.00');
-    const before = await app.sql<{ n: number }>(`select count(*)::int as n from outbox_message`);
+describe('Atomicidade (wallet + ledger + inbox + outbox)', () => {
+  test('falha no COMMIT → NADA é gravado: nem saldo, nem ledger, nem inbox, nem outbox', async () => {
+    const { walletId } = await newWallet('100.00');
+    const outboxBefore = await app.sql<{ n: number }>(`select count(*)::int as n from outbox_message`);
+    const messageId = `atomicity-${Bun.randomUUIDv7()}`;
+
     await expect(
       app.runner.run(async (uow) => {
         const wallet = (await uow.wallets.findByIdForUpdate(walletId))!;
         const entry = wallet.debit(Money.from({ amount: '50.00', currency: 'BRL' }), {
-          transactionId: Bun.randomUUIDv7(), // transação inexistente → FK falha no COMMIT
+          transactionId: Bun.randomUUIDv7(), // transação inexistente → a FK do ledger falha no COMMIT
           ledgerEntryId: Bun.randomUUIDv7(),
           at: new Date(),
         });
+        // As 4 escritas de um processamento real, na mesma transação SQL:
         await uow.ledger.append(entry);
         await uow.wallets.update(wallet);
-        void playerId;
+        const inbox = InboxMessage.receive({ messageId, consumerName: 'atomicity-test', payloadHash: 'a'.repeat(64), receivedAt: new Date() });
+        inbox.markProcessed(new Date());
+        await uow.inbox.insert(inbox);
+        const ctx = { newId: () => Bun.randomUUIDv7(), correlationId: 'atomicity', occurredAt: new Date() };
+        await uow.outbox.add(OutboxMessage.enqueue(WalletBalanceChanged.from(wallet, entry, ctx)));
       }),
     ).rejects.toThrow();
+
     expect((await app.queries.getWallet(walletId)).balance.amount).toBe('100.00');
-    const after = await app.sql<{ n: number }>(`select count(*)::int as n from outbox_message`);
-    expect(after[0]!.n).toBe(before[0]!.n);
     expect((await app.queries.getLedger(walletId, undefined, 50)).items).toHaveLength(1); // só a abertura
+    expect(await app.sql(`select 1 from inbox_message where message_id = ?`, [messageId])).toHaveLength(0);
+    const outboxAfter = await app.sql<{ n: number }>(`select count(*)::int as n from outbox_message`);
+    expect(outboxAfter[0]!.n).toBe(outboxBefore[0]!.n);
   });
 });

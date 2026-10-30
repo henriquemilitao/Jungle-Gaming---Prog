@@ -83,7 +83,7 @@ sufixo próprio**, então as suítes não interferem umas nas outras.
 | Arquivo | Cobre |
 |---|---|
 | `test/unit/*` | `Money` (escala, entradas inválidas, aritmética exata, conflito de moeda), invariantes da `Wallet`, máquina de estados, regras de BET/WIN/LOSS/REFUND/ROLLBACK, hash de idempotência, outbox/inbox, eventos |
-| `integration/schema-constraints` | Migrations reversíveis e constraints atacadas com SQL direto: saldo negativo, ledger append-only, saldo sem lançamento, unicidade, estados terminais, atomicidade |
+| `integration/schema-constraints` | Migrations reversíveis e constraints atacadas com SQL direto: saldo negativo, ledger append-only, saldo sem lançamento, unicidade, estados terminais, atomicidade (wallet + ledger + inbox + outbox) |
 | `integration/wagering` | Idempotência persistente (replay, conflito, saldo do momento), regras com banco real, referência fora de ordem, paginação por cursor |
 | `integration/messaging` | Consumidor SQS: inbox, redelivery, ack, DLQ (permanentes), retry → DLQ (transitórios), publishers concorrentes na outbox, falha de publicação com backoff |
 | `integration/http-api` | Um status HTTP por situação (201/200/202/400/404/409/422), contratos, health, métricas |
