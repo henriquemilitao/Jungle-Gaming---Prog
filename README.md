@@ -38,6 +38,20 @@ curl localhost:3001/health/ready
 
 ---
 
+### Windows + WSL2
+
+1. Use o **Docker Desktop** com a integração WSL ligada (*Settings → Resources → WSL integration*) ou o
+   Docker Engine instalado dentro da distro. Confira com `docker compose version` no terminal do WSL.
+2. Clone o projeto **dentro do filesystem do Linux** (ex.: `~/projetos`), e não em `/mnt/c/...`. Em
+   `/mnt/c`, o I/O é muito mais lento e o watch de arquivos não funciona direito.
+3. Instale o Bun no WSL: `curl -fsSL https://bun.sh/install | bash` e reabra o terminal.
+4. Se já existir um PostgreSQL rodando na porta 5432 (no Windows ou no WSL), pare-o ou troque a porta
+   publicada no `docker-compose.yml` (`"5433:5432"`) e use `TEST_DATABASE_URL` com a nova porta.
+5. As portas publicadas (3001–3003, 5432, 4566) ficam acessíveis tanto do WSL quanto do Windows,
+   via `localhost`.
+
+---
+
 ## Rodando os testes
 
 Os testes de integração e de concorrência usam **PostgreSQL e SQS reais** (os containers do compose).

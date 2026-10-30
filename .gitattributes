@@ -1,0 +1,4 @@
+# Força LF em todos os arquivos de texto (evita CRLF quebrando scripts/SQL no Docker em Windows/WSL)
+* text=auto eol=lf
+*.sh text eol=lf
+*.sql text eol=lf
