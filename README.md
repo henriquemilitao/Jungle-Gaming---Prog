@@ -8,6 +8,17 @@ mesmo com mensagens duplicadas, fora de ordem, simultâneas e com processos morr
 
 As decisões de arquitetura, os trade-offs e as limitações estão em [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
+## Como este projeto foi desenvolvido
+
+Usei IA (Claude) como par de programação para acelerar a escrita do código, dos testes e da documentação. Meu papel foi:
+
+- ler o enunciado e definir a forma de trabalho: em fases, com commits separados para revisar um a um;
+- discutir e escolher as decisões principais, como MikroORM, lock pessimista por wallet (em vez do otimista sugerido) e deixar a autenticação documentada;
+- validar tudo na minha máquina (Windows + WSL2 + Docker): subir o compose, rodar os 166 testes e o teste de carga e conferir cenários na mão;
+- revisar o código para explicar e defender cada decisão na apresentação.
+
+Por isso o histórico mostra o projeto construído em pouco tempo, e alguns commits têm a marcação de coautoria.
+
 ---
 
 ## Subindo o ambiente
